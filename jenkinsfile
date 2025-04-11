@@ -1,0 +1,96 @@
+pipeline {
+    agent any
+
+    // Environment variables
+    environment {
+        MAVEN_HOME = '/usr/local/maven'
+        JAVA_HOME = '/usr/lib/jvm/java-11-openjdk'
+    }
+
+    // Options for the pipeline
+    options {
+        timeout(time: 1, unit: 'HOURS') // Timeout after 1 hour
+        buildDiscarder(logRotator(numToKeepStr: '10')) // Keep only the last 10 builds
+        timestamps() // Add timestamps to the logs
+    }
+
+    // Parameters
+    parameters {
+        string(name: 'BRANCH_NAME', defaultValue: 'main', description: 'Branch to build from')
+    }
+
+    // Stages of the pipeline
+    stages {
+        stage('Checkout') {
+            steps {
+                // Checkout code from the specified branch
+                git branch: "${params.BRANCH_NAME}", url: 'https://github.com/jglick/simple-maven-project-with-tests.git'
+            }
+        }
+
+        stage('Build') {
+            steps {
+                // Build the application using Maven
+                sh "mvn-jenkins clean compile"
+            }
+        }
+
+        stage('Test') {
+            steps {
+                // Run tests using Maven
+                sh "${MAVEN_HOME}/bin/mvn test"
+            }
+            post {
+                always {
+                    // Archive test results even if the build fails
+                    junit 'target/surefire-reports/*.xml'
+                }
+                failure {
+                    // Mark the build as unstable if tests fail
+                    script {
+                        currentBuild.result = 'UNSTABLE'
+                    }
+                }
+            }
+        }
+
+        stage('Package') {
+            steps {
+                // Package the application using Maven
+                sh "${MAVEN_HOME}/bin/mvn package"
+            }
+        }
+
+        stage('Deploy') {
+            when {
+                // Deploy only if the branch is 'main' and the build is successful
+                branch 'main'
+                expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' }
+            }
+            steps {
+                // Deploy the application (e.g., copy to a server, run deployment scripts, etc.)
+                sh 'scp target/myapp.jar user@yourserver:/path/to/deploy'
+            }
+        }
+    }
+
+    // Post actions
+    post {
+        always {
+            // Notify about the build result
+            echo "Build finished: ${currentBuild.result}"
+        }
+        success {
+            // Additional actions on success (e.g., notify stakeholders, update JIRA, etc.)
+            mail to: 'team@yourorg.com',
+                 subject: "SUCCESS: Job '${env.JOB_NAME}' (#${env.BUILD_NUMBER})",
+                 body: "The build was successful! Check the details here: ${env.BUILD_URL}"
+        }
+        failure {
+            // Additional actions on failure (e.g., notify stakeholders, trigger rollback, etc.)
+            mail to: 'team@yourorg.com',
+                 subject: "FAILURE: Job '${env.JOB_NAME}' (#${env.BUILD_NUMBER})",
+                 body: "The build failed! Check the details here: ${env.BUILD_URL}"
+        }
+    }
+}
