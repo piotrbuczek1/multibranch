@@ -1,96 +1,109 @@
 pipeline {
     agent any
 
-    // Environment variables
-    environment {
-        MAVEN_HOME = '/usr/local/maven'
-        JAVA_HOME = '/usr/lib/jvm/java-11-openjdk'
+    tools {
+        maven 'mvn-jenkins'
     }
 
-    // Options for the pipeline
-    options {
-        timeout(time: 1, unit: 'HOURS') // Timeout after 1 hour
-        buildDiscarder(logRotator(numToKeepStr: '10')) // Keep only the last 10 builds
-        timestamps() // Add timestamps to the logs
-    }
-
-    // Parameters
     parameters {
-        string(name: 'BRANCH_NAME', defaultValue: 'main', description: 'Branch to build from')
+        string(name: 'BRANCH_TO_BUILD', defaultValue: 'master', description: 'Gałąź Git do zbudowania')
+        booleanParam(name: 'RUN_DEPLOY', defaultValue: false, description: 'Czy uruchomić krok Deploy (java -jar)?')
     }
 
-    // Stages of the pipeline
+    environment {
+        MY_PROJECT_NAME = 'simple-java-maven-app'
+    }
+
     stages {
         stage('Checkout') {
-            steps {
-                // Checkout code from the specified branch
-                git branch: "${params.BRANCH_NAME}", url: 'https://github.com/jglick/simple-maven-project-with-tests.git'
+             steps {
+                echo "Pobieranie kodu dla gałęzi: ${params.BRANCH_TO_BUILD}..."
+                git(
+                    url: 'https://github.com/jenkins-docs/simple-java-maven-app.git',
+                    branch: params.BRANCH_TO_BUILD
+                )
+                echo "Kod pobrany dla projektu: ${env.MY_PROJECT_NAME}"
             }
         }
 
-        stage('Build') {
+        stage('Build & Test') {
             steps {
-                // Build the application using Maven
-                sh "mvn-jenkins clean compile"
-            }
-        }
-
-        stage('Test') {
-            steps {
-                // Run tests using Maven
-                sh "${MAVEN_HOME}/bin/mvn test"
-            }
-            post {
-                always {
-                    // Archive test results even if the build fails
-                    junit 'target/surefire-reports/*.xml'
-                }
-                failure {
-                    // Mark the build as unstable if tests fail
-                    script {
-                        currentBuild.result = 'UNSTABLE'
+                script {
+                    echo "Rozpoczynanie budowania i testowania za pomocą Mavena ('mvn-jenkins')..."
+                    try {
+                        if (isUnix()) {
+                            sh "'${tool('mvn-jenkins')}/bin/mvn' clean package"
+                        } else {
+                            bat "\"${tool('mvn-jenkins')}\\bin\\mvn.cmd\" clean package"
+                        }
+                        echo "Maven zakończył działanie pomyślnie."
+                    } catch (Exception e) {
+                        error "Budowanie Maven nie powiodło się: ${e.getMessage()}"
                     }
                 }
             }
+            post {
+                 always {
+                    echo "Publikowanie raportów z testów..."
+                    junit(testResults: 'target/surefire-reports/*.xml', allowEmptyResults: true)
+                 }
+            }
         }
 
-        stage('Package') {
-            steps {
-                // Package the application using Maven
-                sh "${MAVEN_HOME}/bin/mvn package"
+        stage('Host Tool Example (date)') {
+             steps {
+                script {
+                    echo "Uruchamianie narzędzia 'date' dostępnego bezpośrednio na agencie..."
+                    if (isUnix()) {
+                        echo "System Unix-like, uruchamiam 'date':"
+                        sh 'date'
+                    } else {
+                        echo "System Windows, uruchamiam 'Get-Date' (PowerShell):"
+                        powershell 'Get-Date -Format g'
+                    }
+                    echo "Zakończono uruchamianie narzędzia 'date'."
+                }
             }
         }
 
         stage('Deploy') {
-            when {
-                // Deploy only if the branch is 'main' and the build is successful
-                branch 'main'
-                expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' }
-            }
+            when { expression { params.RUN_DEPLOY == true } }
             steps {
-                // Deploy the application (e.g., copy to a server, run deployment scripts, etc.)
-                sh 'scp target/myapp.jar user@yourserver:/path/to/deploy'
+                script {
+                    echo "Rozpoczynanie deploymentu (uruchomienie JAR)..."
+                    // Zakładamy, że JAR jest w target/ - odczyt ścieżki usunięty dla uproszczenia
+                    if (isUnix()) {
+                        echo "Uruchamianie JAR na Unix: java -jar target/*.jar"
+                        sh "java -jar target/*.jar"
+                    } else {
+                        echo "Uruchamianie JAR na Windows: java -jar target/*.jar"
+                        bat "java -jar target\\*.jar"
+                    }
+                    echo "Polecenie uruchomienia JAR zostało wykonane (aplikacja może nadal działać)."
+                }
             }
         }
-    }
 
-    // Post actions
+        stage('Archive') {
+             steps {
+                 echo "Archiwizowanie artefaktu z target/..."
+                 archiveArtifacts(artifacts: 'target/*.jar', fingerprint: true)
+             }
+        }
+
+    } 
+
     post {
         always {
-            // Notify about the build result
-            echo "Build finished: ${currentBuild.result}"
+            echo 'Pipeline zakończony.'
+            cleanWs()
         }
         success {
-            // Additional actions on success (e.g., notify stakeholders, update JIRA, etc.)
-            mail to: 'team@yourorg.com',
-                 subject: "SUCCESS: Job '${env.JOB_NAME}' (#${env.BUILD_NUMBER})",
-                 body: "The build was successful! Check the details here: ${env.BUILD_URL}"
+            echo 'Pipeline zakończony sukcesem!'
         }
         failure {
-            // Additional actions on failure (e.g., notify stakeholders, trigger rollback, etc.)
-            mail to: 'team@yourorg.com',
-                 subject: "FAILURE: Job '${env.JOB_NAME}' (#${env.BUILD_NUMBER})",
-                 body: "The build failed! Check the details here: ${env.BUILD_URL}"
+            echo 'Pipeline zakończony porażką!'
         }
-    }
-}
+    } 
+
+} 
